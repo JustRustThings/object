@@ -293,6 +293,10 @@ impl<'data> ExportTable<'data> {
         let mut exports = Vec::new();
         let ordinal_base = self.ordinal_base();
         for (i, address) in self.addresses.iter().enumerate() {
+            if address.get(LE) == 0 {
+                continue;
+            }
+
             // Convert from an array index to an ordinal.
             let ordinal = ordinal_base.wrapping_add(i as u32);
             let target = self.target_from_address(address.get(LE))?;
