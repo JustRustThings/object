@@ -383,6 +383,10 @@ impl<'data> ExportTable<'data> {
         // First, let's list all exports.
         let mut exports = Vec::new();
         for (_index, ordinal, address) in self.address_iter() {
+            if address == 0 {
+                continue;
+            }
+
             let target = self.target_from_address(address)?;
             exports.push(Export {
                 ordinal,
