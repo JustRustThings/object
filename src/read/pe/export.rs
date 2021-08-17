@@ -402,8 +402,7 @@ impl<'data> ExportTable<'data> {
             let name = self.name_from_pointer(name_pointer)?;
             exports
                 .get_mut(ordinal_index.0 as usize)
-                .read_error("Invalid PE export ordinal")?
-                .name = Some(name);
+                .map(|export| export.name = Some(name));
         }
 
         Ok(exports)
