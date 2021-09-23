@@ -2,7 +2,7 @@ use core::marker::PhantomData;
 use core::{cmp, iter, slice, str};
 
 use crate::endian::LittleEndian as LE;
-use crate::pe;
+use crate::pe::{self, ImageSectionHeader};
 use crate::read::{
     self, CompressedData, CompressedFileRange, ObjectSection, ObjectSegment, ReadError, ReadRef,
     Relocation, Result, SectionFlags, SectionIndex, SectionKind,
@@ -291,7 +291,9 @@ impl<'data> SectionTable<'data> {
     ///
     /// Ignores sections with invalid data.
     pub fn pe_data_at<R: ReadRef<'data>>(&self, data: R, va: u32) -> Option<&'data [u8]> {
-        self.iter().find_map(|section| section.pe_data_at(data, va))
+        self.section_at(data, va).and_then(|section| {
+            section.pe_data_at(data, va)
+        })
     }
 
     /// Return the data of the section that contains the given virtual address in a PE file.
@@ -304,8 +306,35 @@ impl<'data> SectionTable<'data> {
         data: R,
         va: u32,
     ) -> Option<(&'data [u8], u32)> {
-        self.iter()
-            .find_map(|section| section.pe_data_containing(data, va))
+        self.section_at(data, va)
+            .and_then(|s|
+                data.read_bytes_at(s.pointer_to_raw_data.get(LE) as u64, s.virtual_size.get(LE) as u64)
+                .ok()
+                .and_then(|data| Some((data, s.pointer_to_raw_data.get(LE))))
+            )
+    }
+
+    /// Return the section that contains a given virtual address in a PE file.
+    pub fn section_at<R: ReadRef<'data>>(
+        &self,
+        data: R,
+        va: u32,
+    ) -> Option<&'data ImageSectionHeader> {
+        let mut last_matching_section = None;
+        for section in self.iter() {
+            if va >= section.virtual_address.get(LE) {
+                let offset = va.checked_sub(section.virtual_address.get(LE))?;
+                let raw_data = offset + section.pointer_to_raw_data.get(LE);
+                if let Ok(data_len) = data.len() {
+                    if raw_data as u64 > data_len {
+                        continue;
+                    }
+                }
+                last_matching_section = Some(section);
+            }
+        }
+
+        last_matching_section
     }
 }
 
@@ -343,8 +372,16 @@ impl pe::ImageSectionHeader {
         let (section_offset, section_size) = self.pe_file_range();
         // Address must be within section (and not at its end).
         if offset < section_size {
+            // Do not attempt to read past the end of file (in case he section SizeOfRawData has been tmapered with)
+            let read_size = match data.len() {
+                Err(_err) => section_size as u64,
+                Ok(file_size) => {
+                    std::cmp::min(section_size as u64, file_size.wrapping_sub(section_offset as u64))
+                },
+            };
+
             let section_data = data
-                .read_bytes_at(section_offset.into(), section_size.into())
+                .read_bytes_at(section_offset.into(), read_size.into())
                 .ok()?;
             section_data.get(offset as usize..)
         } else {
