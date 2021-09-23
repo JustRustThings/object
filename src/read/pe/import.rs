@@ -4,7 +4,9 @@ use core::mem;
 use crate::endian::{LittleEndian as LE, U16Bytes};
 use crate::pe;
 use crate::pod::Pod;
+use crate::read::pe::SectionTable;
 use crate::read::{Bytes, ReadError, Result};
+use crate::ReadRef;
 
 use super::ImageNtHeaders;
 
@@ -12,13 +14,13 @@ use super::ImageNtHeaders;
 ///
 /// Returned by [`DataDirectories::import_table`](super::DataDirectories::import_table).
 #[derive(Debug, Clone)]
-pub struct ImportTable<'data> {
-    section_data: Bytes<'data>,
-    section_address: u32,
+pub struct ImportTable<'data, R: ReadRef<'data>> {
+    file_data: R,
+    section_table: SectionTable<'data>,
     import_address: u32,
 }
 
-impl<'data> ImportTable<'data> {
+impl<'data, R: ReadRef<'data>> ImportTable<'data, R> {
     /// Create a new import table parser.
     ///
     /// The import descriptors start at `import_address`.
@@ -28,20 +30,21 @@ impl<'data> ImportTable<'data> {
     /// `section_data` should be from the section containing `import_address`, and
     /// `section_address` should be the address of that section. Pointers within the
     /// descriptors and thunks may point to anywhere within the section data.
-    pub fn new(section_data: &'data [u8], section_address: u32, import_address: u32) -> Self {
+    pub fn new(file_data: R, section_table: SectionTable<'data>, import_address: u32) -> Self {
         ImportTable {
-            section_data: Bytes(section_data),
-            section_address,
+            file_data,
+            section_table,
             import_address,
         }
     }
 
     /// Return an iterator for the import descriptors.
     pub fn descriptors(&self) -> Result<ImportDescriptorIterator<'data>> {
-        let offset = self.import_address.wrapping_sub(self.section_address);
-        let mut data = self.section_data;
-        data.skip(offset as usize)
+        let import_data = self
+            .section_table
+            .pe_data_at(self.file_data, self.import_address)
             .read_error("Invalid PE import descriptor address")?;
+        let data = Bytes(import_data);
         Ok(ImportDescriptorIterator { data })
     }
 
@@ -49,9 +52,14 @@ impl<'data> ImportTable<'data> {
     ///
     /// This address may be from [`pe::ImageImportDescriptor::name`].
     pub fn name(&self, address: u32) -> Result<&'data [u8]> {
-        self.section_data
-            .read_string_at(address.wrapping_sub(self.section_address) as usize)
-            .read_error("Invalid PE import descriptor name")
+        let res = self
+            .section_table
+            .pe_data_at(self.file_data, address)
+            .map(Bytes)
+            .ok_or(())
+            .and_then(|mut bytes| bytes.read_string())
+            .read_error("Invalid PE import descriptor name");
+        res
     }
 
     /// Return a list of thunks given its address.
@@ -59,10 +67,12 @@ impl<'data> ImportTable<'data> {
     /// This address may be from [`pe::ImageImportDescriptor::original_first_thunk`]
     /// or [`pe::ImageImportDescriptor::first_thunk`].
     pub fn thunks(&self, address: u32) -> Result<ImportThunkList<'data>> {
-        let offset = address.wrapping_sub(self.section_address);
-        let mut data = self.section_data;
-        data.skip(offset as usize)
-            .read_error("Invalid PE import thunk table address")?;
+        let data = self
+            .section_table
+            .pe_data_at(self.file_data, address)
+            .read_error("Invalid thunk address")?;
+        let data = Bytes(data);
+
         Ok(ImportThunkList { data })
     }
 
@@ -82,10 +92,12 @@ impl<'data> ImportTable<'data> {
     ///
     /// The hint is an index into the export name pointer table in the target library.
     pub fn hint_name(&self, address: u32) -> Result<(u16, &'data [u8])> {
-        let offset = address.wrapping_sub(self.section_address);
-        let mut data = self.section_data;
-        data.skip(offset as usize)
+        let hint_data = self
+            .section_table
+            .pe_data_at(self.file_data, address)
             .read_error("Invalid PE import thunk address")?;
+        let mut data = Bytes(hint_data);
+
         let hint = data
             .read::<U16Bytes<LE>>()
             .read_error("Missing PE import thunk hint")?
