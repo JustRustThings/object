@@ -108,7 +108,7 @@ where
     /// Returns the import table of this file.
     ///
     /// The import table is located using the data directory.
-    pub fn import_table(&self) -> Result<Option<ImportTable<'data>>> {
+    pub fn import_table(&self) -> Result<Option<ImportTable<'data, R>>> {
         self.data_directories
             .import_table(self.data, &self.common.sections)
     }
