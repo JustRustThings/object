@@ -162,6 +162,57 @@ impl<'data> DataDirectories<'data> {
         let rsrc_data = data_dir.data(data, sections)?;
         Ok(Some(ResourceDirectory::new(rsrc_data)))
     }
+
+    /// Compute the maximum file offset used by data directories.
+    ///
+    /// This will usually match the end of file, unless the PE file has a
+    /// [data overlay](https://security.stackexchange.com/questions/77336/how-is-the-file-overlay-read-by-an-exe-virus)
+    ///
+    /// Note that the "security" directory (that contains a file signature) is ignored because it is considered an exception to the concept of a data overlay
+    pub fn max_directory_file_offset(
+        &self,
+        file_size_if_known: Option<u64>,
+        section_table: &SectionTable<'data>,
+    ) -> Option<u64> {
+        let mut max = None;
+
+        for (dir_index, directory) in self.enumerate() {
+            if dir_index == pe::IMAGE_DIRECTORY_ENTRY_SECURITY {
+                continue;
+            }
+
+            let rva = directory.virtual_address.get(LE);
+            let section_for_dir = match section_table.section_at(file_size_if_known, rva) {
+                None => continue,
+                Some(sec) => sec,
+            };
+
+            match rva
+                .checked_sub(section_for_dir.virtual_address.get(LE))
+                .and_then(|value| value.checked_sub(section_for_dir.pointer_to_raw_data.get(LE)))
+                .and_then(|file_offset| {
+                    (file_offset as u64).checked_add(directory.size.get(LE) as u64)
+                }) {
+                None => {
+                    // This cannot happen, we're suming two u32 into a u64
+                    continue;
+                }
+                Some(end_of_directory) => {
+                    if let Some(total_size) = file_size_if_known {
+                        if end_of_directory > total_size {
+                            // We can safely ignore directories that report a bogus size
+                            continue;
+                        }
+                    }
+
+                    if end_of_directory > max.unwrap_or(0) {
+                        max = Some(end_of_directory);
+                    }
+                }
+            }
+        }
+        max
+    }
 }
 
 impl pe::ImageDataDirectory {
