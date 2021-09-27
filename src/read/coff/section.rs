@@ -15,6 +15,7 @@ use super::{CoffFile, CoffRelocationIterator};
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SectionTable<'data> {
     sections: &'data [pe::ImageSectionHeader],
+    file_size: Option<u64>,
 }
 
 impl<'data> SectionTable<'data> {
@@ -30,7 +31,9 @@ impl<'data> SectionTable<'data> {
         let sections = data
             .read_slice_at(offset, header.number_of_sections.get(LE).into())
             .read_error("Invalid COFF/PE section headers")?;
-        Ok(SectionTable { sections })
+
+        let file_size = data.len().ok();
+        Ok(SectionTable { sections, file_size })
     }
 
     /// Iterate over the section headers.
@@ -94,6 +97,13 @@ impl<'data> SectionTable<'data> {
                     continue;
                 }
                 Some(end_of_section) => {
+                    if let Some(file_size) = self.file_size {
+                        if end_of_section > file_size {
+                            // We can safely ignore sections that report a bogus size
+                            continue;
+                        }
+                    }
+
                     if end_of_section > max {
                         max = end_of_section;
                     }
