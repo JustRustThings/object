@@ -1014,3 +1014,139 @@ impl ImageOptionalHeader for pe::ImageOptionalHeader64 {
         self.number_of_rva_and_sizes.get(LE)
     }
 }
+
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use std::path::Path;
+    use std::string::String;
+
+    // .text	@1000 + 8000 or 7a00
+    // .rdata	@9000 + 1000 or 1000
+    // .data	@a000 + 1000 or 200
+    // .bss 	@b000 + 5000 or 4800
+    // .reloc	@10000 + 1000 or 800
+
+    #[test]
+    fn zboub() {
+        //let file = std::fs::File::open(Path::new("/home/jerome/VirtualBox VMs/Shared files/samples/others/clang_rt.asan_dynamic-x86_64.dll")).unwrap();
+        //let file = std::fs::File::open("/home/jerome/VirtualBox VMs/Shared files/ryuk/cfe1678a7f2b949966d9a020faafb46662584f8a6ac4b72583a21fa858f2a2e8.exe").unwrap();
+        //let file = std::fs::File::open("/home/jerome/VirtualBox VMs/Shared files/git.exe").unwrap();
+        let file = std::fs::File::open("/home/jerome/VirtualBox VMs/Shared files/samples/new/benign/msedge.exe").unwrap();
+        let map = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+
+        let parsed_file: &PeFile64 = &PeFile::parse(&*map).unwrap();
+        // for section in parsed_file.section_table().iter() {
+        //     let name = section.name;
+        //     println!("\n* {:?}\t@{:x} + {:x} or {:x}", std::str::from_utf8(&section.name), section.virtual_address.get(LE), section.virtual_size.get(LE), section.size_of_raw_data.get(LE));
+
+        //     // if &name[..5] == b".data" {
+        //         let data = parsed_file.section_table().pe_data_at(parsed_file.data(), section.virtual_address.get(LE));
+        //         match data {
+        //             None => println!("    nodata"),
+        //             Some(d) => println!("    data: {:x?}", &d[..min(10, d.len())]),
+        //         }
+        //     // }
+
+        // }
+
+        //let bva = parsed_file.nt_headers().optional_header().image_base.get(LE);
+        //println!("Exports (BVA @ {:x}", bva);
+        //for e in parsed_file.exports().unwrap() {
+        //    println!("  * {}\t{:x}", std::str::from_utf8(e.name()).unwrap(), e.address() - bva as u64)
+        //}
+
+        // let import_table = parsed_file.import_table().unwrap().unwrap();
+        // let mut import_descriptors = import_table.descriptors().unwrap();
+        // loop {
+        //     match import_descriptors.next() {
+        //         Err(_err) => break,
+        //         Ok(None) => break,
+        //         Ok(Some(imported_lib)) => {
+        //             let lib_name = match import_table.name(imported_lib.name.get(LE)) {
+        //                 Ok(name) => name,
+        //                 Err(err) => {
+        //                     println!("Unable to read an imported library name: {}", err);
+        //                     continue;
+        //                 },
+        //             };
+        //             println!("____{:?}", std::str::from_utf8(lib_name));
+
+        //             // Usually, `original_first_thunk` and `first_thunk` would point to the same location
+        //             // But it turns out only one of them is necessary (that's at least what the pefile library considers)
+        //             let mut thunks = match import_table.thunks(imported_lib.original_first_thunk.get(LE)) {
+        //                 Ok(thunks) => thunks,
+        //                 Err(err) => {
+        //                     println!("Unable to get the thunks for imported library '{:?}': {}. Trying with another pointer.", std::str::from_utf8(lib_name), err);
+
+        //                     match import_table.thunks(imported_lib.first_thunk.get(LE)) {
+        //                         Ok(thunks) => thunks,
+        //                         Err(err) => {
+        //                             println!("Unable to get the thunks for imported library '{:?}': {}.", std::str::from_utf8(lib_name), err);
+        //                             continue;
+        //                         },
+        //                     }
+        //                 },
+        //             };
+
+        //             loop {
+        //                 match thunks.next::<crate::pe::ImageNtHeaders32>() {
+        //                     Err(_err) => break,
+        //                     Ok(None) => break,
+        //                     Ok(Some(thunk)) => {
+        //                         println!("  * {:?}", detected_name_for(&thunk, lib_name, &import_table));
+        //                     },
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+
+        // let sections = parsed_file.section_table();
+        // println!("Sections:");
+        // for sec in sections.iter() {
+        //     let addr = sec.pointer_to_raw_data.get(LE);
+        //     println!("  * {:x} + {:x}", addr, sec.virtual_size.get(LE));
+        //     let data = sections.pe_data_at(parsed_file.data(), addr);
+        //     println!("    {:x?} >> {:x?} {:x?} {:x?}", data.map(|d| d.len()), data.map(|d| d[0]), data.map(|d| d[1]), data.map(|d| d[2]));
+        // }
+
+
+        // println!("Directories:");
+        // for (index, dir) in parsed_file.data_directories().enumerate() {
+        //     println!("  * {:x} @{:x} + {:x}", index, dir.virtual_address.get(LE), dir.size.get(LE));
+        // }
+
+    }
+
+
+    #[test]
+    fn edge() {
+        let file = std::fs::File::open(Path::new(
+            "/home/jerome/VirtualBox VMs/Shared files/samples/benign/msedge.exe",
+        ))
+        .unwrap();
+        let map = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+
+        let parsed_file: &PeFile64 = &PeFile::parse(&*map).unwrap();
+        println!("Imports: {:?}", parsed_file.imports());
+    }
+
+    #[test]
+    fn test_rich_header() {
+        let file = std::fs::File::open(Path::new("tests/threadz-injector.exe")).unwrap();
+        let map = unsafe { memmap2::Mmap::map(&file) }.unwrap();
+
+        let parsed_file: &PeFile32 = &PeFile::parse(&*map).unwrap();
+        assert_eq!(parsed_file.rich_header_info().unwrap().xor_key, 0x399a23f4);
+
+        //println!("Items {:#x?}", parsed_file.rich_header_masked_entries);
+
+        for entry in parsed_file.rich_header_info().unwrap().unmasked_entries() {
+            println!("Entry {:?}", entry);
+        }
+    }
+}
