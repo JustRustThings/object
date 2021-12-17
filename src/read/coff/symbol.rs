@@ -28,27 +28,35 @@ where
 impl<'data, R: ReadRef<'data>> SymbolTable<'data, R> {
     /// Read the symbol table.
     pub fn parse(header: &pe::ImageFileHeader, data: R) -> Result<Self> {
-        // The symbol table may not be present.
+        // According to MS, "COFF debugging information is deprecated", so the symbol table may not be present.
         let mut offset = header.pointer_to_symbol_table.get(LE).into();
-        let (symbols, strings) = if offset != 0 {
-            let symbols = data
-                .read_slice(&mut offset, header.number_of_symbols.get(LE) as usize)
-                .read_error("Invalid COFF symbol table offset or size")?;
+        if offset == 0 {
+            return Ok(SymbolTable {
+                symbols: &[][..],
+                strings: StringTable::default(),
+            });
+        }
 
-            // Note: don't update data when reading length; the length includes itself.
-            let length = data
-                .read_at::<U32Bytes<_>>(offset)
-                .read_error("Missing COFF string table")?
-                .get(LE);
-            let str_end = offset
-                .checked_add(length as u64)
-                .read_error("Invalid COFF string table length")?;
-            let strings = StringTable::new(data, offset, str_end);
-
-            (symbols, strings)
-        } else {
-            (&[][..], StringTable::default())
+        let symbols = match data.read_slice(&mut offset, header.number_of_symbols.get(LE) as usize)
+        {
+            Ok(sybls) => sybls,
+            Err(_) => {
+                return Ok(SymbolTable {
+                    symbols: &[][..],
+                    strings: StringTable::default(),
+                })
+            }
         };
+
+        // Note: don't update data when reading length; the length includes itself.
+        let length = data
+            .read_at::<U32Bytes<_>>(offset)
+            .read_error("Missing COFF string table")?
+            .get(LE);
+        let str_end = offset
+            .checked_add(length as u64)
+            .read_error("Invalid COFF string table length")?;
+        let strings = StringTable::new(data, offset, str_end);
 
         Ok(SymbolTable { symbols, strings })
     }
