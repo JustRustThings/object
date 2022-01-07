@@ -331,6 +331,11 @@ impl<'data> SectionTable<'data> {
             .and_then(|data| Some((data, s.pointer_to_raw_data.get(LE))))
         })
     }
+
+    /// Return the section that contains a given virtual address in a PE file.
+    pub fn section_at(&self, va: u32) -> Option<&'data ImageSectionHeader> {
+        self.iter().find(|section| section.contains_rva(va))
+    }
 }
 
 impl pe::ImageSectionHeader {
