@@ -1,6 +1,6 @@
 use core::slice;
 
-use crate::read::{Error, ReadError, ReadRef, Result};
+use crate::read::{ReadError, ReadRef, Result};
 use crate::{pe, LittleEndian as LE};
 
 use super::{ExportTable, ImportTable, RelocationBlockIterator, SectionTable};
@@ -167,27 +167,36 @@ impl<'data> DataDirectories<'data> {
 
 impl pe::ImageDataDirectory {
     /// Return the virtual address range of this directory entry.
+    ///
+    /// For correctly formatted PE files, this range does not overlap sections.
     pub fn address_range(&self) -> (u32, u32) {
         (self.virtual_address.get(LE), self.size.get(LE))
     }
 
-    /// Return the file offset and size of this directory entry.
+    /// Return the file offset range of this directory entry.
     ///
-    /// This function has some limitations:
-    /// - It requires that the data is contained in a single section.
-    /// - It uses the size field of the directory entry, which is
-    /// not desirable for all data directories.
-    /// - It uses the `virtual_address` of the directory entry as an address,
-    /// which is not valid for `IMAGE_DIRECTORY_ENTRY_SECURITY`.
+    /// For correctly formatted PE files, this range does not overlap sections.
     pub fn file_range<'data>(&self, sections: &SectionTable<'data>) -> Result<(u32, u32)> {
-        let (offset, section_size) = sections
-            .pe_file_range_at(self.virtual_address.get(LE))
-            .read_error("Invalid data dir virtual address")?;
-        let size = self.size.get(LE);
-        if size > section_size {
-            return Err(Error("Invalid data dir size"));
-        }
-        Ok((offset, size))
+        let start_section =
+            sections
+                .section_at(self.virtual_address.get(LE))
+                .ok_or(crate::read::Error(
+                    "This directory does not point to a valid section",
+                ))?;
+
+        let section_file_offset = start_section.pointer_to_raw_data.get(LE);
+        let section_va = start_section.virtual_address.get(LE);
+        let start = self
+            .virtual_address
+            .get(LE)
+            .checked_sub(section_va)
+            .and_then(|a| a.checked_add(section_file_offset))
+            .ok_or(crate::read::Error("Invalid directory addresses"))?;
+        let end = start
+            .checked_add(self.size.get(LE))
+            .ok_or(crate::read::Error("Invalid directory addresses"))?;
+
+        Ok((start, end))
     }
 
     /// Get the data referenced by this directory entry.
