@@ -313,29 +313,6 @@ impl<'data> SectionTable<'data> {
                 .and_then(|data| Some((data, s.pointer_to_raw_data.get(LE))))
             )
     }
-
-    /// Return the section that contains a given virtual address in a PE file.
-    pub fn section_at<R: ReadRef<'data>>(
-        &self,
-        data: R,
-        va: u32,
-    ) -> Option<&'data ImageSectionHeader> {
-        let mut last_matching_section = None;
-        for section in self.iter() {
-            if va >= section.virtual_address.get(LE) {
-                let offset = va.checked_sub(section.virtual_address.get(LE))?;
-                let raw_data = offset + section.pointer_to_raw_data.get(LE);
-                if let Ok(data_len) = data.len() {
-                    if raw_data as u64 > data_len {
-                        continue;
-                    }
-                }
-                last_matching_section = Some(section);
-            }
-        }
-
-        last_matching_section
-    }
 }
 
 impl pe::ImageSectionHeader {
