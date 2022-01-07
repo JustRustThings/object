@@ -170,8 +170,36 @@ impl<'data> DataDirectories<'data> {
 
 impl pe::ImageDataDirectory {
     /// Return the virtual address range of this directory entry.
+    ///
+    /// For correctly formatted PE files, this range does not overlap sections.
     pub fn address_range(&self) -> (u32, u32) {
         (self.virtual_address.get(LE), self.size.get(LE))
+    }
+
+    /// Return the file offset range of this directory entry.
+    ///
+    /// For correctly formatted PE files, this range does not overlap sections.
+    pub fn file_offset_range<'data>(&self, sections: &SectionTable<'data>) -> Result<(u32, u32)> {
+        let start_section =
+            sections
+                .section_at(self.virtual_address.get(LE))
+                .ok_or(crate::read::Error(
+                    "This directory does not point to a valid section",
+                ))?;
+
+        let section_file_offset = start_section.pointer_to_raw_data.get(LE);
+        let section_va = start_section.virtual_address.get(LE);
+        let start = self
+            .virtual_address
+            .get(LE)
+            .checked_sub(section_va)
+            .and_then(|a| a.checked_add(section_file_offset))
+            .ok_or(crate::read::Error("Invalid directory addresses"))?;
+        let end = start
+            .checked_add(self.size.get(LE))
+            .ok_or(crate::read::Error("Invalid directory addresses"))?;
+
+        Ok((start, end))
     }
 
     /// Get the data referenced by this directory entry.
