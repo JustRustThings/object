@@ -133,7 +133,7 @@ impl<'data> DataDirectories<'data> {
             }
 
             let rva = directory.virtual_address.get(LE);
-            let section_for_dir = match section_table.section_at(data, rva) {
+            let section_for_dir = match section_table.section_at(data.len().ok(), rva) {
                 None => continue,
                 Some(sec) => sec,
             };
@@ -180,12 +180,11 @@ impl pe::ImageDataDirectory {
     ///
     /// For correctly formatted PE files, this range does not overlap sections.
     pub fn file_offset_range<'data>(&self, sections: &SectionTable<'data>) -> Result<(u32, u32)> {
-        let start_section =
-            sections
-                .section_at(self.virtual_address.get(LE))
-                .ok_or(crate::read::Error(
-                    "This directory does not point to a valid section",
-                ))?;
+        let start_section = sections
+            .section_at(None, self.virtual_address.get(LE))
+            .ok_or(crate::read::Error(
+                "This directory does not point to a valid section",
+            ))?;
 
         let section_file_offset = start_section.pointer_to_raw_data.get(LE);
         let section_va = start_section.virtual_address.get(LE);
