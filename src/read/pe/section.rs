@@ -340,6 +340,19 @@ impl pe::ImageSectionHeader {
             .read_error("Invalid PE section offset or size")
     }
 
+    /// Tests whether a given RVA is part of this section
+    pub fn contains_rva(&self, va: u32) -> bool {
+        let section_va = self.virtual_address.get(LE);
+        match va.checked_sub(section_va) {
+            None => false,
+            Some(offset) => {
+                let (_section_offset, section_size) = self.pe_file_range();
+                // Address must be within section (and not at its end).
+                offset < section_size
+            }
+        }
+    }
+
     /// Return the data at the given virtual address if this section contains it.
     ///
     /// Ignores sections with invalid data.
