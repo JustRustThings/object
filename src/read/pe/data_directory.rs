@@ -82,8 +82,18 @@ impl<'data> DataDirectories<'data> {
             None => return Ok(None),
         };
         let export_va = data_dir.virtual_address.get(LE);
-        let export_data = data_dir.data(data, sections)?;
-        ExportTable::parse(export_data, export_va).map(Some)
+        let file_len = data.len().read_error("Unable to get the file size")?;
+        let file_data = data
+            .read_bytes_at(0, file_len)
+            .read_error("Unable to get the file data")?;
+        let file_offset_of_directory = data_dir.file_range(sections)?.0;
+        ExportTable::parse(
+            file_data,
+            file_offset_of_directory,
+            export_va,
+            data_dir.size.get(LE),
+        )
+        .map(Some)
     }
 
     /// Returns the partially parsed import directory.
