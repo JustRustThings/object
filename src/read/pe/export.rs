@@ -82,8 +82,10 @@ impl<'a> Debug for ExportTarget<'a> {
 /// A partially parsed PE export table.
 #[derive(Debug, Clone)]
 pub struct ExportTable<'data> {
-    data: Bytes<'data>,
+    file_data: Bytes<'data>,
+    file_offset: u32,
     virtual_address: u32,
+    directory_size: u32,
     directory: &'data pe::ImageExportDirectory,
     addresses: &'data [U32Bytes<LE>],
     names: &'data [U32Bytes<LE>],
@@ -92,14 +94,23 @@ pub struct ExportTable<'data> {
 
 impl<'data> ExportTable<'data> {
     /// Parse the export table given its section data and address.
-    pub fn parse(data: &'data [u8], virtual_address: u32) -> Result<Self> {
-        let directory = Self::parse_directory(data)?;
-        let data = Bytes(data);
+    pub fn parse(
+        file_data: &'data [u8],
+        file_offset: u32,
+        virtual_address: u32,
+        directory_size: u32,
+    ) -> Result<Self> {
+        let directory_data = file_data
+            .get(file_offset as usize..)
+            .ok_or(Error("Invalid file offset"))?;
+        let directory = Self::parse_directory(directory_data)?;
+        let dir_data = Bytes(directory_data);
+        let file_data = Bytes(file_data);
 
         let mut addresses = &[][..];
         let address_of_functions = directory.address_of_functions.get(LE);
         if address_of_functions != 0 {
-            addresses = data
+            addresses = dir_data
                 .read_slice_at::<U32Bytes<_>>(
                     address_of_functions.wrapping_sub(virtual_address) as usize,
                     directory.number_of_functions.get(LE) as usize,
@@ -117,13 +128,13 @@ impl<'data> ExportTable<'data> {
             }
 
             let number = directory.number_of_names.get(LE) as usize;
-            names = data
+            names = dir_data
                 .read_slice_at::<U32Bytes<_>>(
                     address_of_names.wrapping_sub(virtual_address) as usize,
                     number,
                 )
                 .read_error("Invalid PE export name pointer table")?;
-            name_ordinals = data
+            name_ordinals = dir_data
                 .read_slice_at::<U16Bytes<_>>(
                     address_of_name_ordinals.wrapping_sub(virtual_address) as usize,
                     number,
@@ -132,8 +143,10 @@ impl<'data> ExportTable<'data> {
         }
 
         Ok(ExportTable {
-            data,
+            file_data,
+            file_offset,
             virtual_address,
+            directory_size,
             directory,
             addresses,
             names,
@@ -255,7 +268,7 @@ impl<'data> ExportTable<'data> {
 
     fn forward_offset(&self, address: u32) -> Option<usize> {
         let offset = address.wrapping_sub(self.virtual_address) as usize;
-        if offset < self.data.len() {
+        if offset < self.directory_size as usize {
             Some(offset)
         } else {
             None
@@ -270,8 +283,11 @@ impl<'data> ExportTable<'data> {
     /// Return the forward string if the export address table entry is a forward.
     pub fn forward_string(&self, address: u32) -> Result<Option<&'data [u8]>> {
         if let Some(offset) = self.forward_offset(address) {
-            self.data
-                .read_string_at(offset)
+            let file_offset = offset
+                .checked_add(self.file_offset as usize)
+                .read_error("Invalid forward string offset")?;
+            self.file_data
+                .read_string_at(file_offset)
                 .read_error("Invalid PE forwarded export address")
                 .map(Some)
         } else {
@@ -281,8 +297,12 @@ impl<'data> ExportTable<'data> {
 
     /// Convert an export name pointer table entry into a name.
     pub fn name_from_pointer(&self, name_pointer: u32) -> Result<&'data [u8]> {
-        let offset = name_pointer.wrapping_sub(self.virtual_address);
-        self.data
+        let offset = name_pointer
+            .checked_sub(self.virtual_address)
+            .read_error("Invalid name pointer offset")?
+            .checked_add(self.file_offset)
+            .read_error("Invalid name pointer offset")?;
+        self.file_data
             .read_string_at(offset as usize)
             .read_error("Invalid PE export name pointer")
     }
