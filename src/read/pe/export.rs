@@ -126,7 +126,9 @@ impl<'a> fmt::Debug for ExportTarget<'a> {
 #[derive(Debug, Clone)]
 pub struct ExportTable<'data> {
     data: Bytes<'data>,
+    file_offset: Option<u32>,
     virtual_address: u32,
+    directory_size: Option<u32>,
     directory: &'data pe::ImageExportDirectory,
     ordinal_base: u16,
     addresses: &'data [U32<LE>],
@@ -137,7 +139,37 @@ pub struct ExportTable<'data> {
 impl<'data> ExportTable<'data> {
     /// Parse the export table given its section data and address.
     pub fn parse(data: &'data [u8], virtual_address: u32) -> Result<Self> {
-        let directory = Self::parse_directory(data)?;
+        Self::parse_inner(data, None, virtual_address, None)
+    }
+
+    /// Parse the export table in a more lenient manner given the whole file
+    /// data, the offset at which the directory data starts, the section
+    /// address, and the size of the directory data.
+    pub fn parse_lenient(
+        file_data: &'data [u8],
+        file_offset: u32,
+        virtual_address: u32,
+        directory_size: u32,
+    ) -> Result<Self> {
+        Self::parse_inner(
+            file_data,
+            Some(file_offset),
+            virtual_address,
+            Some(directory_size),
+        )
+    }
+
+    /// Common point between [`Self::parse`] and [`Self::parse_lenient`].
+    pub fn parse_inner(
+        data: &'data [u8],
+        file_offset: Option<u32>,
+        virtual_address: u32,
+        directory_size: Option<u32>,
+    ) -> Result<Self> {
+        let directory_data = data
+            .get(file_offset.unwrap_or_default() as usize..)
+            .ok_or(Error("Invalid file offset"))?;
+        let directory = Self::parse_directory(directory_data)?;
         let data = Bytes(data);
 
         let Ok(ordinal_base) = u16::try_from(directory.base.get(LE)) else {
@@ -155,7 +187,9 @@ impl<'data> ExportTable<'data> {
             }
             addresses = data
                 .read_slice_at::<U32<_>>(
-                    address_of_functions.wrapping_sub(virtual_address) as usize,
+                    address_of_functions
+                        .wrapping_sub(virtual_address)
+                        .wrapping_add(file_offset.unwrap_or_default()) as usize,
                     number,
                 )
                 .read_error("Invalid PE export address table")?;
@@ -173,21 +207,27 @@ impl<'data> ExportTable<'data> {
             let number = directory.number_of_names.get(LE) as usize;
             names = data
                 .read_slice_at::<U32<_>>(
-                    address_of_names.wrapping_sub(virtual_address) as usize,
+                    address_of_names
+                        .wrapping_sub(virtual_address)
+                        .wrapping_add(file_offset.unwrap_or_default()) as usize,
                     number,
                 )
                 .read_error("Invalid PE export name pointer table")?;
             name_ordinals = data
                 .read_slice_at::<U16<_, _>>(
-                    address_of_name_ordinals.wrapping_sub(virtual_address) as usize,
+                    address_of_name_ordinals
+                        .wrapping_sub(virtual_address)
+                        .wrapping_add(file_offset.unwrap_or_default()) as usize,
                     number,
                 )
                 .read_error("Invalid PE export ordinal table")?;
         }
 
-        Ok(ExportTable {
+        Ok(Self {
             data,
+            file_offset,
             virtual_address,
+            directory_size,
             directory,
             ordinal_base,
             addresses,
@@ -346,7 +386,11 @@ impl<'data> ExportTable<'data> {
 
     fn forward_offset(&self, address: u32) -> Option<usize> {
         let offset = address.wrapping_sub(self.virtual_address) as usize;
-        if offset < self.data.len() {
+        if offset
+            < self
+                .directory_size
+                .map_or(self.data.len(), |ds| ds as usize)
+        {
             Some(offset)
         } else {
             None
@@ -362,7 +406,11 @@ impl<'data> ExportTable<'data> {
     pub fn forward_string(&self, address: u32) -> Result<Option<&'data [u8]>> {
         if let Some(offset) = self.forward_offset(address) {
             self.data
-                .read_string_at(offset)
+                .read_string_at(
+                    offset
+                        .checked_add(self.file_offset.unwrap_or_default() as usize)
+                        .read_error("Invalid forward string offset")?,
+                )
                 .read_error("Invalid PE forwarded export address")
                 .map(Some)
         } else {
@@ -372,7 +420,9 @@ impl<'data> ExportTable<'data> {
 
     /// Convert an export name pointer table entry into a name.
     pub fn name_from_pointer(&self, name_pointer: u32) -> Result<&'data [u8]> {
-        let offset = name_pointer.wrapping_sub(self.virtual_address);
+        let offset = name_pointer
+            .wrapping_sub(self.virtual_address)
+            .wrapping_add(self.file_offset.unwrap_or_default());
         self.data
             .read_string_at(offset as usize)
             .read_error("Invalid PE export name pointer")

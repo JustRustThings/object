@@ -505,7 +505,7 @@ where
     Pe: ImageNtHeaders,
     R: ReadRef<'data>,
 {
-    table: Option<ImportTable<'data>>,
+    table: Option<ImportTable<'data, R>>,
     descs: Option<ImportDescriptorIterator<'data>>,
     delay_table: Option<DelayLoadImportTable<'data>>,
     delay_descs: Option<DelayLoadDescriptorIterator<'data>>,
@@ -607,7 +607,7 @@ where
     Pe: ImageNtHeaders,
     R: ReadRef<'data>,
 {
-    table: Option<ImportTable<'data>>,
+    table: Option<ImportTable<'data, R>>,
     descs: Option<ImportDescriptorIterator<'data>>,
     delay_table: Option<DelayLoadImportTable<'data>>,
     delay_descs: Option<DelayLoadDescriptorIterator<'data>>,
