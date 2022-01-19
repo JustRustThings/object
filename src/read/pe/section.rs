@@ -308,7 +308,7 @@ impl<'data> SectionTable<'data> {
     ///
     /// Returns `None` if no section contains the address.
     pub fn pe_data_at<R: ReadRef<'data>>(&self, data: R, va: u32) -> Option<&'data [u8]> {
-        self.section_at(data, va)
+        self.section_at(data.len().ok(), va)
             .and_then(|section| section.pe_data_at(data, va))
     }
 
@@ -322,7 +322,7 @@ impl<'data> SectionTable<'data> {
         data: R,
         va: u32,
     ) -> Option<(&'data [u8], u32)> {
-        self.section_at(data, va).and_then(|s| {
+        self.section_at(data.len().ok(), va).and_then(|s| {
             data.read_bytes_at(
                 s.pointer_to_raw_data.get(LE) as u64,
                 s.virtual_size.get(LE) as u64,
@@ -333,8 +333,26 @@ impl<'data> SectionTable<'data> {
     }
 
     /// Return the section that contains a given virtual address in a PE file.
-    pub fn section_at(&self, va: u32) -> Option<&'data ImageSectionHeader> {
-        self.iter().find(|section| section.contains_rva(va))
+    pub fn section_at(
+        &self,
+        file_size_if_known: Option<u64>,
+        va: u32,
+    ) -> Option<&'data ImageSectionHeader> {
+        let mut last_matching_section = None;
+        for section in self.iter() {
+            if va >= section.virtual_address.get(LE) {
+                let offset = va.checked_sub(section.virtual_address.get(LE))?;
+                let raw_data = offset + section.pointer_to_raw_data.get(LE);
+                if let Some(data_len) = file_size_if_known {
+                    if raw_data as u64 > data_len {
+                        continue;
+                    }
+                }
+                last_matching_section = Some(section);
+            }
+        }
+
+        last_matching_section
     }
 }
 

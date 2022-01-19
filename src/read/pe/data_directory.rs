@@ -140,10 +140,9 @@ impl<'data> DataDirectories<'data> {
     /// [data overlay](https://security.stackexchange.com/questions/77336/how-is-the-file-overlay-read-by-an-exe-virus)
     ///
     /// Note that the "security" directory (that contains a file signature) is ignored because it is considered an exception to the concept of a data overlay
-    pub fn max_directory_file_offset<R: ReadRef<'data>>(
+    pub fn max_directory_file_offset(
         &self,
         file_size_if_known: Option<u64>,
-        data: R,
         section_table: &'data SectionTable,
     ) -> Option<u64> {
         let mut max = None;
@@ -154,7 +153,7 @@ impl<'data> DataDirectories<'data> {
             }
 
             let rva = directory.virtual_address.get(LE);
-            let section_for_dir = match section_table.section_at(data, rva) {
+            let section_for_dir = match section_table.section_at(file_size_if_known, rva) {
                 None => continue,
                 Some(sec) => sec,
             };
@@ -199,12 +198,11 @@ impl pe::ImageDataDirectory {
     ///
     /// For correctly formatted PE files, this range does not overlap sections.
     pub fn file_range<'data>(&self, sections: &SectionTable<'data>) -> Result<(u32, u32)> {
-        let start_section =
-            sections
-                .section_at(self.virtual_address.get(LE))
-                .ok_or(crate::read::Error(
-                    "This directory does not point to a valid section",
-                ))?;
+        let start_section = sections
+            .section_at(None, self.virtual_address.get(LE))
+            .ok_or(crate::read::Error(
+                "This directory does not point to a valid section",
+            ))?;
 
         let section_file_offset = start_section.pointer_to_raw_data.get(LE);
         let section_va = start_section.virtual_address.get(LE);
