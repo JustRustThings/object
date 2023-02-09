@@ -104,15 +104,15 @@ impl<'data> ExportTable<'data> {
             .get(file_offset as usize..)
             .ok_or(Error("Invalid file offset"))?;
         let directory = Self::parse_directory(directory_data)?;
-        let dir_data = Bytes(directory_data);
+        //let dir_data = Bytes(directory_data);
         let file_data = Bytes(file_data);
 
         let mut addresses = &[][..];
         let address_of_functions = directory.address_of_functions.get(LE);
         if address_of_functions != 0 {
-            addresses = dir_data
+            addresses = file_data
                 .read_slice_at::<U32Bytes<_>>(
-                    address_of_functions.wrapping_sub(virtual_address) as usize,
+                    address_of_functions.wrapping_sub(virtual_address).wrapping_add(file_offset) as usize,
                     directory.number_of_functions.get(LE) as usize,
                 )
                 .read_error("Invalid PE export address table")?;
@@ -128,15 +128,15 @@ impl<'data> ExportTable<'data> {
             }
 
             let number = directory.number_of_names.get(LE) as usize;
-            names = dir_data
+            names = file_data
                 .read_slice_at::<U32Bytes<_>>(
-                    address_of_names.wrapping_sub(virtual_address) as usize,
+                    address_of_names.wrapping_sub(virtual_address).wrapping_add(file_offset) as usize,
                     number,
                 )
                 .read_error("Invalid PE export name pointer table")?;
-            name_ordinals = dir_data
+            name_ordinals = file_data
                 .read_slice_at::<U16Bytes<_>>(
-                    address_of_name_ordinals.wrapping_sub(virtual_address) as usize,
+                    address_of_name_ordinals.wrapping_sub(virtual_address).wrapping_add(file_offset) as usize,
                     number,
                 )
                 .read_error("Invalid PE export ordinal table")?;
@@ -298,10 +298,8 @@ impl<'data> ExportTable<'data> {
     /// Convert an export name pointer table entry into a name.
     pub fn name_from_pointer(&self, name_pointer: u32) -> Result<&'data [u8]> {
         let offset = name_pointer
-            .checked_sub(self.virtual_address)
-            .read_error("Invalid name pointer offset")?
-            .checked_add(self.file_offset)
-            .read_error("Invalid name pointer offset")?;
+            .wrapping_sub(self.virtual_address)
+            .wrapping_add(self.file_offset);
         self.file_data
             .read_string_at(offset as usize)
             .read_error("Invalid PE export name pointer")
