@@ -391,7 +391,7 @@ impl<'data> SectionTable<'data> {
         for section in self.iter() {
             if va >= section.virtual_address.get(LE) {
                 let offset = va.checked_sub(section.virtual_address.get(LE))?;
-                let raw_data = offset + section.pointer_to_raw_data.get(LE);
+                let raw_data = offset.checked_add(section.pointer_to_raw_data.get(LE))?;
                 if let Some(data_len) = file_size_if_known {
                     if raw_data as u64 > data_len {
                         continue;
