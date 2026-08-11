@@ -99,7 +99,7 @@ impl<'data> DataDirectories<'data> {
         &self,
         data: R,
         sections: &SectionTable<'data>,
-    ) -> Result<Option<ImportTable<'data>>> {
+    ) -> Result<Option<ImportTable<'data, R>>> {
         let data_dir = match self.get(pe::IMAGE_DIRECTORY_ENTRY_IMPORT) {
             Some(data_dir) => data_dir,
             None => return Ok(None),
