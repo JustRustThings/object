@@ -12,7 +12,9 @@ use super::{ImageNtHeaders, SectionTable};
 ///
 /// Returned by [`DataDirectories::import_table`](super::DataDirectories::import_table).
 #[derive(Debug, Clone)]
-pub struct ImportTable<'data> {
+pub struct ImportTable<'data, R: ReadRef<'data> = &'data [u8]> {
+    file_data: Option<R>,
+    section_table: Option<SectionTable<'data>>,
     import_address: u32,
     import_section_data: Bytes<'data>,
     import_section_address: u32,
@@ -20,7 +22,9 @@ pub struct ImportTable<'data> {
     name_section_address: u32,
 }
 
-impl<'data> ImportTable<'data> {
+/// [`Self::new`] is put separately in order to prevent compilation failures
+/// when the `R` type parameter is not specified.
+impl<'data> ImportTable<'data, &'data [u8]> {
     /// Create a new import table parser.
     ///
     /// The import descriptors start at `import_address`.
@@ -30,8 +34,18 @@ impl<'data> ImportTable<'data> {
     /// `section_data` should be from the section containing `import_address`, and
     /// `section_address` should be the address of that section. Pointers within the
     /// descriptors and thunks may point to anywhere within the section data.
+    #[inline]
     pub fn new(section_data: &'data [u8], section_address: u32, import_address: u32) -> Self {
-        ImportTable {
+        Self::new_inner(section_data, section_address, import_address)
+    }
+}
+
+impl<'data, R: ReadRef<'data>> ImportTable<'data, R> {
+    /// Common point between [`Self::new`] and [`Self::from_sections`].
+    fn new_inner(section_data: &'data [u8], section_address: u32, import_address: u32) -> Self {
+        Self {
+            file_data: None,
+            section_table: None,
             import_address,
             import_section_data: Bytes(section_data),
             import_section_address: section_address,
@@ -51,15 +65,18 @@ impl<'data> ImportTable<'data> {
     ///
     /// We also support names in a separate section by parsing the first descriptor
     /// to get the name address, and finding the section containing that address.
-    pub fn from_sections<R: ReadRef<'data>>(
+    pub fn from_sections(
         data: R,
         sections: &SectionTable<'data>,
         import_address: u32,
     ) -> Result<Self> {
         let (section_data, section_address) = sections
             .pe_data_containing(data, import_address)
-            .read_error("Invalid import data dir virtual address")?;
-        let mut imports = Self::new(section_data, section_address, import_address);
+            .unwrap_or_default();
+        let mut imports = Self::new_inner(section_data, section_address, import_address);
+
+        imports.section_table = Some(*sections);
+        imports.file_data = Some(data);
 
         // Usually imports, names and thunks are all in the same section. However,
         // this isn't required, and use of different sections has been seen in older
@@ -79,17 +96,29 @@ impl<'data> ImportTable<'data> {
                 }
             }
         }
+
         Ok(imports)
     }
 
     /// Return an iterator for the import descriptors.
     pub fn descriptors(&self) -> Result<ImportDescriptorIterator<'data>> {
-        let offset = self
-            .import_address
-            .wrapping_sub(self.import_section_address);
-        let mut data = self.import_section_data;
-        data.skip(offset as usize)
-            .read_error("Invalid PE import descriptor address")?;
+        let data = if let Some((section_table, file_data)) =
+            self.section_table.as_ref().zip(self.file_data)
+        {
+            Bytes(
+                section_table
+                    .pe_data_at(file_data, self.import_address)
+                    .read_error("Invalid PE import descriptor address")?,
+            )
+        } else {
+            let offset = self
+                .import_address
+                .wrapping_sub(self.import_section_address);
+            let mut data = self.import_section_data;
+            data.skip(offset as usize)
+                .read_error("Invalid PE import descriptor address")?;
+            data
+        };
         Ok(ImportDescriptorIterator { data, null: false })
     }
 
@@ -97,9 +126,18 @@ impl<'data> ImportTable<'data> {
     ///
     /// This address may be from [`pe::ImageImportDescriptor::name`].
     pub fn name(&self, address: u32) -> Result<&'data [u8]> {
-        self.name_section_data
-            .read_string_at(address.wrapping_sub(self.name_section_address) as usize)
-            .read_error("Invalid PE import descriptor name")
+        if let Some((section_table, file_data)) = self.section_table.as_ref().zip(self.file_data) {
+            section_table
+                .pe_data_at(file_data, address)
+                .map(Bytes)
+                .ok_or(())
+                .and_then(|mut bytes| bytes.read_string())
+                .read_error("Invalid PE import descriptor name")
+        } else {
+            self.name_section_data
+                .read_string_at(address.wrapping_sub(self.name_section_address) as usize)
+                .read_error("Invalid PE import descriptor name")
+        }
     }
 
     /// Return a list of thunks given its address.
@@ -107,10 +145,21 @@ impl<'data> ImportTable<'data> {
     /// This address may be from [`pe::ImageImportDescriptor::original_first_thunk`]
     /// or [`pe::ImageImportDescriptor::first_thunk`].
     pub fn thunks(&self, address: u32) -> Result<ImportThunkList<'data>> {
-        let offset = address.wrapping_sub(self.import_section_address);
-        let mut data = self.import_section_data;
-        data.skip(offset as usize)
-            .read_error("Invalid PE import thunk table address")?;
+        let data = if let Some((section_table, file_data)) =
+            self.section_table.as_ref().zip(self.file_data)
+        {
+            Bytes(
+                section_table
+                    .pe_data_at(file_data, address)
+                    .read_error("Invalid thunk address")?,
+            )
+        } else {
+            let offset = address.wrapping_sub(self.import_section_address);
+            let mut data = self.import_section_data;
+            data.skip(offset as usize)
+                .read_error("Invalid PE import thunk table address")?;
+            data
+        };
         Ok(ImportThunkList { data })
     }
 
@@ -130,10 +179,21 @@ impl<'data> ImportTable<'data> {
     ///
     /// The hint is an index into the export name pointer table in the target library.
     pub fn hint_name(&self, address: u32) -> Result<(u16, &'data [u8])> {
-        let offset = address.wrapping_sub(self.name_section_address);
-        let mut data = self.name_section_data;
-        data.skip(offset as usize)
-            .read_error("Invalid PE import thunk address")?;
+        let mut data = if let Some((section_table, file_data)) =
+            self.section_table.as_ref().zip(self.file_data)
+        {
+            Bytes(
+                section_table
+                    .pe_data_at(file_data, address)
+                    .read_error("Invalid PE import thunk address")?,
+            )
+        } else {
+            let offset = address.wrapping_sub(self.name_section_address);
+            let mut data = self.name_section_data;
+            data.skip(offset as usize)
+                .read_error("Invalid PE import thunk address")?;
+            data
+        };
         let hint = data
             .read::<U16<LE>>()
             .read_error("Missing PE import thunk hint")?
